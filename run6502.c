@@ -39,6 +39,8 @@ static char *program= 0;
 
 static byte bank[0x10][0x4000];
 
+static char *tube_command= 0;
+
 
 void fail(const char *fmt, ...)
 {
@@ -283,9 +285,17 @@ static int tubeOsbyte(M6502 *mpu, word address, byte value)
             if (mpu->registers->y == 6)
               {
   	        /* http://beebwiki.jonripley.com/OSBYTE_%26A3 says this occurs on Tube 
-                 * reset to ask for a * command to execute. Just say no. 
+                 * reset to ask for a * command to execute.
                  */
-            	mpu->registers->y = 0;
+	        if (tube_command)
+                  {
+		    strcpy(mpu->memory + 0x800, tube_command);
+		    strcat(mpu->memory + 0x800, "\r");
+		    mpu->registers->y = 0x08;
+		    mpu->registers->x = 0x00;
+                  }
+                else
+             	  mpu->registers->y= 0;
                 return 0;
               }
             else if (mpu->registers->y == 4)
@@ -293,7 +303,7 @@ static int tubeOsbyte(M6502 *mpu, word address, byte value)
                 /* Same reference; this occurs in some other cases too but we're not
                  * interested.
                  */
-            	mpu->registers->y = 0;
+            	mpu->registers->y= 0;
                 return 0;
               }
           }
@@ -329,6 +339,21 @@ static int tubeOsword(M6502 *mpu, word address, byte value)
     /* Carry on. TODO: What does a real machine do in this case? */
 
     return 0;
+}
+
+
+static int tubeOsrdch(M6502 *mpu, word address, byte value)
+{
+  /* TODO: Very crude. Would be good to work getline support in. Perhaps ideally a
+   * command line option would optionally select a mode where we can read single
+   * keypresses. For that matter, it might also be nice to do a curses mode with
+   * basic terminal emulation.
+   */
+  int c= getchar();
+  if (c == EOF)
+    exit(0);
+  mpu->registers->a= c;
+  return 0;
 }
 
 
@@ -381,6 +406,7 @@ static int doTtraps(int argc, char **argv, M6502 *mpu)
   M6502_setCallback(mpu, illegal_instruction, 0x13, tubeOsbyte);
   M6502_setCallback(mpu, illegal_instruction, 0x23, tubeOsword);
   M6502_setCallback(mpu, illegal_instruction, 0x33, oswrchCommon);
+  M6502_setCallback(mpu, illegal_instruction, 0x43, tubeOsrdch);
   M6502_setCallback(mpu, illegal_instruction, 0xB3, tubeQuit);
   M6502_setCallback(mpu, illegal_instruction, 0xC3, tubeEnterLanguage);
 
@@ -397,6 +423,7 @@ static void usage(int status)
   fprintf(stream, "usage: %s [option ...]\n", program);
   fprintf(stream, "       %s [option ...] -B [image ...]\n", program);
   fprintf(stream, "  -B                -- minimal Acorn 'BBC Model B' compatibility\n");
+  fprintf(stream, "  -c                -- next argument is command to run on Tube startup\n");
   fprintf(stream, "  -d addr last      -- dump memory between addr and last\n");
   fprintf(stream, "  -G addr           -- emulate getchar(3) at addr\n");
   fprintf(stream, "  -h                -- help (print this message)\n");
@@ -407,7 +434,7 @@ static void usage(int status)
   fprintf(stream, "  -P addr           -- emulate putchar(3) at addr\n");
   fprintf(stream, "  -R addr           -- set RST vector\n");
   fprintf(stream, "  -s addr last file -- save memory from addr to last in file\n");
-  fprintf(stream, "  -T                -- Acorn 6502 tube emulation\n");
+  fprintf(stream, "  -T                -- Acorn 6502 Tube emulation\n");
   fprintf(stream, "  -v                -- print version number then exit\n");
   fprintf(stream, "  -X addr           -- terminate emulation if PC reaches addr\n");
   fprintf(stream, "  -x                -- exit wihout further ado\n");
@@ -586,6 +613,14 @@ static int doXtrap(int argc, char **argv, M6502 *mpu)
 }
 
 
+static int doTubeCommand(int argc, char **argv, M6502 *mpu)
+{
+  if (argc < 2) usage(1);
+  tube_command = argv[1]; 
+  return 1;
+}
+
+
 static int doDisassemble(int argc, char **argv, M6502 *mpu)
 {
   unsigned addr= 0, last= 0;
@@ -629,6 +664,7 @@ int main(int argc, char **argv)
       {
 	int n= 0;
 	if      (!strcmp(*argv, "-B"))  bTraps= 1;
+        else if (!strcmp(*argv, "-c"))  n= doTubeCommand(argc, argv, mpu);
 	else if (!strcmp(*argv, "-d"))	n= doDisassemble(argc, argv, mpu);
 	else if (!strcmp(*argv, "-G"))	n= doGtrap(argc, argv, mpu);
 	else if (!strcmp(*argv, "-h"))	n= doHelp(argc, argv, mpu);
@@ -664,6 +700,9 @@ int main(int argc, char **argv)
 
   if (bTraps && tTraps)
     fail("-B and -T are incompatible");
+
+  if (tube_command && !tTraps)
+    fail("-c is only valid with -T");
 
   if (bTraps)
     doBtraps(0, 0, mpu);
