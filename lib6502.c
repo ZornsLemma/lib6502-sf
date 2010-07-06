@@ -17,7 +17,7 @@
  * THE SOFTWARE IS PROVIDED 'AS IS'.  USE ENTIRELY AT YOUR OWN RISK.
  */
 
-/* Last edited: 2005-11-02 01:18:47 by piumarta on margaux.local
+/* Last edited:
  * 
  * BUGS:
  *   - RTS and RTI do not check the return address for a callback
@@ -579,13 +579,27 @@ enum {
   tick(ticks);					\
   next();
 
-/* output the error before calling fetch(), otherwise the GNU C version reports wrong instruction */
-#define ill(ticks, adrmode)						\
-  fflush(stdout);							\
-  fprintf(stderr, "\nundefined instruction %02X at %04X\n", memory[PC-1], PC-1);	\
-  fetch();								\
-  tick(ticks);								\
-  return;
+/* determine addr and instruction before calling fetch(), otherwise the GNU C version gets it wrong */
+#define ill(ticks, adrmode)								\
+  {											\
+    word addr= PC-1;									\
+    byte instruction= memory[addr];							\
+    fetch();										\
+    tick(ticks);									\
+    if (mpu->callbacks->illegal_instruction[instruction])				\
+      {											\
+	externalise();									\
+	mpu->callbacks->illegal_instruction[instruction](mpu, addr, 0);			\
+	internalise();									\
+	next();										\
+      }											\
+    else										\
+      {											\
+	fflush(stdout);									\
+	fprintf(stderr, "\nundefined instruction %02X at %04X\n", instruction, addr);	\
+	return;										\
+      }											\
+  };
 
 #define phR(ticks, adrmode, R)			\
   fetch();					\
@@ -770,8 +784,8 @@ void M6502_run(M6502 *mpu)
   register void  *tpc;
 
 # define begin()				fetch();  next()
-/* SF: # define fetch()				tpc= itabp[memory[PC++]] */
-# define fetch()				do { tpc= itabp[memory[PC++]]; fprintf(stderr, "todo: %04X %02X\n", (unsigned) (PC-1), (unsigned) memory[PC-1]); } while(0) /* SF TODO TEMP */
+# define fetch()				tpc= itabp[memory[PC++]]
+/* sf temp # define fetch()				do { tpc= itabp[memory[PC++]]; fprintf(stderr, "todo: %04X %02X\n", (unsigned) (PC-1), (unsigned) memory[PC-1]); } while(0) */
 # define next()					goto *tpc
 # define dispatch(num, name, mode, cycles)	_##num: name(cycles, mode) oops();  next()
 # define end()

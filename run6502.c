@@ -179,7 +179,7 @@ int oscli(M6502 *mpu, word address, byte data)
 }
 
 
-int oswrch(M6502 *mpu, word address, byte data)
+static int oswrchCommon(M6502 *mpu, word address, byte data)
 {
   switch (mpu->registers->a)
     {
@@ -192,6 +192,13 @@ int oswrch(M6502 *mpu, word address, byte data)
       break;
     }
   fflush(stdout);
+  return 0;
+}
+
+
+int oswrch(M6502 *mpu, word address, byte data)
+{
+  oswrchCommon(mpu, address, data);
   rts;
 }
 
@@ -239,6 +246,61 @@ static int doBtraps(int argc, char **argv, M6502 *mpu)
 }
 
 
+static int tubeOsword(M6502 *mpu, word address, byte value)
+{
+  switch (mpu->registers->a)
+    {
+#if 0
+      case 0xA3:
+        if ((mpu->registers->x == 243) && (mpu->registers->y == 6))
+          {
+	    /* http://beebwiki.jonripley.com/OSBYTE_%26A3 says this occurs on Tube 
+             * reset to ask for a * command to execute. Just say no. */
+            mpu->registers->y = 0;
+            return 0;
+          }
+        break;
+#endif
+    }
+
+    char state[64];
+    M6502_dump(mpu, state);
+    fflush(stdout);
+    fprintf(stderr, "\nUnsupported OSWORD %02X: %s\n", mpu->registers->a, state);
+    /* Carry on. TODO: What does a real machine do in this case? */
+
+    return 0;
+}
+
+
+static int tubeOsbyte(M6502 *mpu, word address, byte value)
+{
+  switch (mpu->registers->a)
+    {
+      case 0xA3:
+        if ((mpu->registers->x == 243) && (mpu->registers->y == 6))
+          {
+	    /* http://beebwiki.jonripley.com/OSBYTE_%26A3 says this occurs on Tube 
+             * reset to ask for a * command to execute. Just say no. */
+            mpu->registers->y = 0;
+            return 0;
+          }
+        break;
+    }
+
+    char state[64];
+    M6502_dump(mpu, state);
+    fflush(stdout);
+    fprintf(stderr, "\nUnsupported OSBYTE %02X: %s\n", mpu->registers->a, state);
+    /* Carry on; an unsupported OSBYTE is not necessarily a problem, it can happen 
+     * on a real machine. We set X to 0xFF.
+     */
+    mpu->registers->x= 0xFF;
+
+    return 0;
+}
+
+
 static int doTtraps(int argc, char **argv, M6502 *mpu)
 {
   unsigned addr;
@@ -261,35 +323,12 @@ static int doTtraps(int argc, char **argv, M6502 *mpu)
     fail("-T requires Tube emulation ROM to be loaded");
 
   /* on real hardware the ROM is copied into RAM on startup; all 64K is writeable */
-  
-/* todo; */
-#if 0 /* sf todo temp */
-  unsigned addr;
 
-  /* Acorn Model B ROM and memory-mapped IO */
-
-  for (addr= 0x8000;  addr <= 0xFBFF;  ++addr)  mpu->callbacks->write[addr]= writeROM;
-  for (addr= 0xFC00;  addr <= 0xFEFF;  ++addr)  mpu->memory[addr]= 0xFF;
-  for (addr= 0xFE30;  addr <= 0xFE33;  ++addr)  mpu->callbacks->write[addr]= bankSelect;
-  for (addr= 0xFE40;  addr <= 0xFE4F;  ++addr)  mpu->memory[addr]= 0x00;
-  for (addr= 0xFF00;  addr <= 0xFFFF;  ++addr)  mpu->callbacks->write[addr]= writeROM;
-
-  /* anything already loaded at 0x8000 appears in bank 0 */
-
-  memcpy(bank[0x00], mpu->memory + 0x8000, 0x4000);
-
-  /* fake a few interesting OS calls */
-
-# define trap(vec, addr, func)   mpu->callbacks->call[addr]= (func)
-  trap(0x020C, 0xFFF1, osword);
-  trap(0x020A, 0xFFF4, osbyte);
-//trap(0x0208, 0xFFF7, oscli );	/* enable this to send '*COMMAND's to system(3) :-) */
-  trap(0x020E, 0xFFEE, oswrch);
-  trap(0x020E, 0xE0A4, oswrch);	/* NVWRCH */
-#undef trap
+  M6502_setCallback(mpu, illegal_instruction, 0x13, tubeOsbyte);
+  M6502_setCallback(mpu, illegal_instruction, 0x23, tubeOsword);
+  M6502_setCallback(mpu, illegal_instruction, 0x33, oswrchCommon);
 
   return 0;
-#endif
 }
 
 
