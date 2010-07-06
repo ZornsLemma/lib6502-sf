@@ -579,11 +579,12 @@ enum {
   tick(ticks);					\
   next();
 
+/* output the error before calling fetch(), otherwise the GNU C version reports wrong instruction */
 #define ill(ticks, adrmode)						\
+  fflush(stdout);							\
+  fprintf(stderr, "\nundefined instruction %02X at %04X\n", memory[PC-1], PC-1);	\
   fetch();								\
   tick(ticks);								\
-  fflush(stdout);							\
-  fprintf(stderr, "\nundefined instruction %02X\n", memory[PC-1]);	\
   return;
 
 #define phR(ticks, adrmode, R)			\
@@ -769,7 +770,8 @@ void M6502_run(M6502 *mpu)
   register void  *tpc;
 
 # define begin()				fetch();  next()
-# define fetch()				tpc= itabp[memory[PC++]]
+/* SF: # define fetch()				tpc= itabp[memory[PC++]] */
+# define fetch()				do { tpc= itabp[memory[PC++]]; fprintf(stderr, "todo: %04X %02X\n", (unsigned) (PC-1), (unsigned) memory[PC-1]); } while(0) /* SF TODO TEMP */
 # define next()					goto *tpc
 # define dispatch(num, name, mode, cycles)	_##num: name(cycles, mode) oops();  next()
 # define end()

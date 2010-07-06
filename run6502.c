@@ -1,6 +1,7 @@
 /* run6502.c -- 6502 emulator shell			-*- C -*- */
 
 /* Copyright (c) 2005 Ian Piumarta
+/* BBC 6502 second processor emulation (c) 2010 Steven Flintham
  * 
  * All rights reserved.
  *
@@ -17,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED 'AS IS'.  USE ENTIRELY AT YOUR OWN RISK.
  */
 
-/* Last edited: 2005-11-02 01:18:58 by piumarta on margaux.local
+/* Last edited: 
  */
 
 #include <stdio.h>
@@ -235,6 +236,60 @@ static int doBtraps(int argc, char **argv, M6502 *mpu)
 #undef trap
 
   return 0;
+}
+
+
+static int doTtraps(int argc, char **argv, M6502 *mpu)
+{
+  unsigned addr;
+  const char *signature= "Acorn 6502 Tube";
+  size_t signature_length= strlen(signature);
+  int found;
+
+  /* The tube emulation requires the 2K ROM from 65Tube to be loaded at 0xF800. Refuse
+   * to continue if something like it isn't there. To allow for variations, we just
+   * check for a certain string somewhere in the right area.
+   */
+  found= 0;
+  for (addr= 0xF800;  addr <= (0x10000 - signature_length);  ++addr)
+    if (!memcmp(mpu->memory + addr, signature, signature_length))
+      {
+        found= 1; 
+	break;
+      }
+  if (!found)
+    fail("-T requires Tube emulation ROM to be loaded");
+
+  /* on real hardware the ROM is copied into RAM on startup; all 64K is writeable */
+  
+/* todo; */
+#if 0 /* sf todo temp */
+  unsigned addr;
+
+  /* Acorn Model B ROM and memory-mapped IO */
+
+  for (addr= 0x8000;  addr <= 0xFBFF;  ++addr)  mpu->callbacks->write[addr]= writeROM;
+  for (addr= 0xFC00;  addr <= 0xFEFF;  ++addr)  mpu->memory[addr]= 0xFF;
+  for (addr= 0xFE30;  addr <= 0xFE33;  ++addr)  mpu->callbacks->write[addr]= bankSelect;
+  for (addr= 0xFE40;  addr <= 0xFE4F;  ++addr)  mpu->memory[addr]= 0x00;
+  for (addr= 0xFF00;  addr <= 0xFFFF;  ++addr)  mpu->callbacks->write[addr]= writeROM;
+
+  /* anything already loaded at 0x8000 appears in bank 0 */
+
+  memcpy(bank[0x00], mpu->memory + 0x8000, 0x4000);
+
+  /* fake a few interesting OS calls */
+
+# define trap(vec, addr, func)   mpu->callbacks->call[addr]= (func)
+  trap(0x020C, 0xFFF1, osword);
+  trap(0x020A, 0xFFF4, osbyte);
+//trap(0x0208, 0xFFF7, oscli );	/* enable this to send '*COMMAND's to system(3) :-) */
+  trap(0x020E, 0xFFEE, oswrch);
+  trap(0x020E, 0xE0A4, oswrch);	/* NVWRCH */
+#undef trap
+
+  return 0;
+#endif
 }
 
 
@@ -463,6 +518,7 @@ int main(int argc, char **argv)
 {
   M6502 *mpu= M6502_new(0, 0, 0);
   int bTraps= 0;
+  int tTraps= 0;
 
   program= argv[0];
 
@@ -488,6 +544,7 @@ int main(int argc, char **argv)
 	else if (!strcmp(*argv, "-P"))	n= doPtrap(argc, argv, mpu);
 	else if (!strcmp(*argv, "-R"))	n= doRST(argc, argv, mpu);
 	else if (!strcmp(*argv, "-s"))	n= doSave(argc, argv, mpu);
+	else if (!strcmp(*argv, "-T"))  tTraps= 1;
 	else if (!strcmp(*argv, "-v"))	n= doVersion(argc, argv, mpu);
 	else if (!strcmp(*argv, "-X"))	n= doXtrap(argc, argv, mpu);
 	else if (!strcmp(*argv, "-x"))	exit(0);
@@ -509,8 +566,13 @@ int main(int argc, char **argv)
 	argv += n;
       }
 
+  if (bTraps && tTraps)
+    fail("-B and -T are incompatible");
+
   if (bTraps)
     doBtraps(0, 0, mpu);
+  else if (tTraps)
+    doTtraps(0, 0, mpu);
 
   M6502_reset(mpu);
   M6502_run(mpu);

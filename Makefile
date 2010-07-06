@@ -19,7 +19,8 @@
 
 # last edited: 2007-08-30 10:44:08 by piumarta on vps2.piumarta.com
 
-CFLAGS = -g -O3
+# SF: I added __STRICT__ANSI__
+CFLAGS = -g -O3 # SF: -D__STRICT_ANSI__
 
 PREFIX  = /usr/local
 BINDIR  = $(PREFIX)/bin
