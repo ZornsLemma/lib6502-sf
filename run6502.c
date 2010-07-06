@@ -170,6 +170,7 @@ int osbyte(M6502 *mpu, word address, byte data)
 }
 
 
+/* TODO: This is misnamed as it does OSCLI-style parsing */
 static char *getYXString(M6502 *mpu)
 {
   byte *params= mpu->memory + mpu->registers->x + (mpu->registers->y << 8);
@@ -331,6 +332,12 @@ static int tubeOsword(M6502 *mpu, word address, byte value)
 }
 
 
+static int tubeQuit(M6502 *mpu, word address, byte value)
+{
+  exit(0);
+}
+
+
 static int tubeEnterLanguage(M6502 *mpu, word address, byte value)
 {
      /* TODO: We could probably poll the sideways ROMs for a language and copy that across. 
@@ -374,6 +381,7 @@ static int doTtraps(int argc, char **argv, M6502 *mpu)
   M6502_setCallback(mpu, illegal_instruction, 0x13, tubeOsbyte);
   M6502_setCallback(mpu, illegal_instruction, 0x23, tubeOsword);
   M6502_setCallback(mpu, illegal_instruction, 0x33, oswrchCommon);
+  M6502_setCallback(mpu, illegal_instruction, 0xB3, tubeQuit);
   M6502_setCallback(mpu, illegal_instruction, 0xC3, tubeEnterLanguage);
 
   return 0;
