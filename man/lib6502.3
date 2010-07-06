@@ -257,7 +257,9 @@ instruction to the callback in its
 .Fa address
 argument.  (The
 .Fa data
-argument is undefined.)  The value returned from the callback is ignored.
+argument is undefined.)  If the callback returns a non-zero address the 
+emulator will transfer control to that address, otherwise execution will 
+continue at the next instruction.
 .El
 .Pp
 .Fn M6502_getCallback

@@ -584,13 +584,16 @@ enum {
   {											\
     word addr= PC-1;									\
     byte instruction= memory[addr];							\
-    fetch();										\
     tick(ticks);									\
     if (mpu->callbacks->illegal_instruction[instruction])				\
       {											\
 	externalise();									\
-	mpu->callbacks->illegal_instruction[instruction](mpu, addr, 0);			\
+        if (addr= (mpu->callbacks->illegal_instruction[instruction](mpu, addr, 0)))     \
+          {										\
+	    mpu->registers->pc= addr;							\
+          }										\
 	internalise();									\
+        fetch();									\
 	next();										\
       }											\
     else										\

@@ -69,7 +69,7 @@ void pfail(const char *msg)
   }
 
 
-int osword(M6502 *mpu, word address, byte data)
+int osword_common(M6502 *mpu, word address, byte data)
 {
   byte *params= mpu->memory + mpu->registers->x + (mpu->registers->y << 8);
 
@@ -111,7 +111,12 @@ int osword(M6502 *mpu, word address, byte data)
       }
       break;
     }
+}
+
   
+int osword(M6502 *mpu, word address, byte data)
+{
+  osword_common(mpu, address, data);
   rts;
 }
 
@@ -165,15 +170,22 @@ int osbyte(M6502 *mpu, word address, byte data)
 }
 
 
-int oscli(M6502 *mpu, word address, byte data)
+static char *getYXString(M6502 *mpu)
 {
   byte *params= mpu->memory + mpu->registers->x + (mpu->registers->y << 8);
-  char  command[1024], *ptr= command;
+  static char command[1024];
+  char *ptr= command;
   while (('*' == *params) || (' ' == *params))
     ++params;
   while (13 != *params)
     *ptr++= *params++;
   *ptr= '\0';
+  return command;
+}
+
+int oscli(M6502 *mpu, word address, byte data)
+{
+  char *command= getYXString(mpu);
   system(command);
   rts;
 }
@@ -246,21 +258,67 @@ static int doBtraps(int argc, char **argv, M6502 *mpu)
 }
 
 
+static int tubeOscli(M6502 *mpu, word address, byte value)
+{
+  const char *error= "Bad command";
+  size_t error_length= strlen(error);
+  char *command= getYXString(mpu);
+  fprintf(stderr, "TODO OSCLI: '%s'\n", command);
+
+  mpu->memory[0x100]= 0x00; /* BRK */
+  mpu->memory[0x101]= 254;
+  memcpy(mpu->memory + 0x102, error, error_length + 1); /* +1 as we want the NUL terminator */
+  return 0x100;
+}
+
+
+static int tubeOsbyte(M6502 *mpu, word address, byte value)
+{
+  switch (mpu->registers->a)
+    {
+      case 0xA3:
+        if (mpu->registers->x == 243) 
+	  {
+            if (mpu->registers->y == 6)
+              {
+  	        /* http://beebwiki.jonripley.com/OSBYTE_%26A3 says this occurs on Tube 
+                 * reset to ask for a * command to execute. Just say no. 
+                 */
+            	mpu->registers->y = 0;
+                return 0;
+              }
+            else if (mpu->registers->y == 4)
+              {
+                /* Same reference; this occurs in some other cases too but we're not
+                 * interested.
+                 */
+            	mpu->registers->y = 0;
+                return 0;
+              }
+          }
+    }
+
+    char state[64];
+    M6502_dump(mpu, state);
+    fflush(stdout);
+    fprintf(stderr, "\nUnsupported OSBYTE %02X: %s\n", mpu->registers->a, state);
+    /* Carry on; an unsupported OSBYTE is not necessarily a problem, it can happen 
+     * on a real machine. We set X to 0xFF.
+     */
+    mpu->registers->x= 0xFF;
+
+    return 0;
+}
+
+
 static int tubeOsword(M6502 *mpu, word address, byte value)
 {
   switch (mpu->registers->a)
     {
-#if 0
-      case 0xA3:
-        if ((mpu->registers->x == 243) && (mpu->registers->y == 6))
-          {
-	    /* http://beebwiki.jonripley.com/OSBYTE_%26A3 says this occurs on Tube 
-             * reset to ask for a * command to execute. Just say no. */
-            mpu->registers->y = 0;
-            return 0;
-          }
-        break;
-#endif
+      case 0:
+        /* TODO: Use -B's version for now. Ideally I would find some way to use readline. */
+        osword_common(mpu, address, value);
+        return 0;
     }
 
     char state[64];
@@ -273,29 +331,17 @@ static int tubeOsword(M6502 *mpu, word address, byte value)
 }
 
 
-static int tubeOsbyte(M6502 *mpu, word address, byte value)
+static int tubeEnterLanguage(M6502 *mpu, word address, byte value)
 {
-  switch (mpu->registers->a)
-    {
-      case 0xA3:
-        if ((mpu->registers->x == 243) && (mpu->registers->y == 6))
-          {
-	    /* http://beebwiki.jonripley.com/OSBYTE_%26A3 says this occurs on Tube 
-             * reset to ask for a * command to execute. Just say no. */
-            mpu->registers->y = 0;
-            return 0;
-          }
-        break;
-    }
-
+     /* TODO: We could probably poll the sideways ROMs for a language and copy that across. 
+      * Would need to find how to distinguish call with ROM number in X (OSBYTE 142) from 
+      * call made by *BASIC. 
+      */
     char state[64];
     M6502_dump(mpu, state);
     fflush(stdout);
-    fprintf(stderr, "\nUnsupported OSBYTE %02X: %s\n", mpu->registers->a, state);
-    /* Carry on; an unsupported OSBYTE is not necessarily a problem, it can happen 
-     * on a real machine. We set X to 0xFF.
-     */
-    mpu->registers->x= 0xFF;
+    fprintf(stderr, "\nUnsupported enter language call: %s\n", state);
+    fail("ABORT");
 
     return 0;
 }
@@ -324,9 +370,11 @@ static int doTtraps(int argc, char **argv, M6502 *mpu)
 
   /* on real hardware the ROM is copied into RAM on startup; all 64K is writeable */
 
+  M6502_setCallback(mpu, illegal_instruction, 0x03, tubeOscli);
   M6502_setCallback(mpu, illegal_instruction, 0x13, tubeOsbyte);
   M6502_setCallback(mpu, illegal_instruction, 0x23, tubeOsword);
   M6502_setCallback(mpu, illegal_instruction, 0x33, oswrchCommon);
+  M6502_setCallback(mpu, illegal_instruction, 0xC3, tubeEnterLanguage);
 
   return 0;
 }
