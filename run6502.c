@@ -351,6 +351,7 @@ static void usage(int status)
   fprintf(stream, "  -P addr           -- emulate putchar(3) at addr\n");
   fprintf(stream, "  -R addr           -- set RST vector\n");
   fprintf(stream, "  -s addr last file -- save memory from addr to last in file\n");
+  fprintf(stream, "  -T                -- Acorn 6502 tube emulation\n");
   fprintf(stream, "  -v                -- print version number then exit\n");
   fprintf(stream, "  -X addr           -- terminate emulation if PC reaches addr\n");
   fprintf(stream, "  -x                -- exit wihout further ado\n");

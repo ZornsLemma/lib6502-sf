@@ -91,6 +91,13 @@ input-output via stdin and stdout.
 Any remaining non-option arguments on the command line will name files
 to be loaded successively into paged ROMs, starting at 15 and working
 downwards towards 0.
+.It Fl T
+enable Acorn 6502 Tube (second processor) hardware emulation.
+.Pp
+This requires the 2K ROM from Acorn's 65Tube emulator to be loaded at
+0xF800 using 
+.Fl l .
+An error will be generated if this is not done.
 .It Fl d Ar addr Ar end
 dump memory from the address
 .Ar addr

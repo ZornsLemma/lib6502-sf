@@ -1,3 +1,9 @@
+2010-07-06  Steven Flintham  <uk -dot- co -dot- lemma -at- sf (backwards)>
+
+	* 1.0-sf: Unofficial modifications to add -T option (Acorn 6502 Tube emulation).
+
+        * Incidental to the -T support, added callbacks for illegal instructions to lib6502.
+
 2005-11-01  Ian Piumarta  <com -dot- gmail -at- piumarta (backwards)>
 
 	* RELEASE 1.0
