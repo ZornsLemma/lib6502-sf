@@ -94,12 +94,19 @@ int osword_common(M6502 *mpu, word address, byte data)
 	    putchar('\n');
 	    exit(0);
 	  }
+	mpu->registers->p &= 0xFE;
 	for (b= 0;  b < length;  ++b)
-	  if ((buffer[b] < minVal) || (buffer[b] > maxVal) || ('\n' == buffer[b]))
-	    break;
+          {
+            if (buffer[b] == 0x1b)
+              {
+                mpu->registers->p |= 1;
+                break;
+              }
+	    if ((buffer[b] < minVal) || (buffer[b] > maxVal) || ('\n' == buffer[b]))
+	      break;
+          }
 	buffer[b]= 13;
 	mpu->registers->y= b;
-	mpu->registers->p &= 0xFE;
 	break;
       }
 
@@ -423,7 +430,7 @@ static void usage(int status)
   fprintf(stream, "usage: %s [option ...]\n", program);
   fprintf(stream, "       %s [option ...] -B [image ...]\n", program);
   fprintf(stream, "  -B                -- minimal Acorn 'BBC Model B' compatibility\n");
-  fprintf(stream, "  -c                -- next argument is command to run on Tube startup\n");
+  fprintf(stream, "  -c                -- next argument is command to run on Tube startup\n"); /* TODO: This is not documented in run6502.1 */
   fprintf(stream, "  -d addr last      -- dump memory between addr and last\n");
   fprintf(stream, "  -G addr           -- emulate getchar(3) at addr\n");
   fprintf(stream, "  -h                -- help (print this message)\n");
@@ -437,7 +444,7 @@ static void usage(int status)
   fprintf(stream, "  -T                -- Acorn 6502 Tube emulation\n");
   fprintf(stream, "  -v                -- print version number then exit\n");
   fprintf(stream, "  -X addr           -- terminate emulation if PC reaches addr\n");
-  fprintf(stream, "  -x                -- exit wihout further ado\n");
+  fprintf(stream, "  -x                -- exit without further ado\n");
   fprintf(stream, "  image             -- '-l 8000 image' in available ROM slot\n");
   fprintf(stream, "\n");
   fprintf(stream, "'last' can be an address (non-inclusive) or '+size' (in bytes)\n");
