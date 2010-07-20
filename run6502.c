@@ -41,6 +41,11 @@ static byte bank[0x10][0x4000];
 
 static char *tube_command= 0;
 
+static int exit_write= 0;
+static M6502 *exit_write_mpu= 0;
+
+
+
 
 void fail(const char *fmt, ...)
 {
@@ -71,7 +76,7 @@ void pfail(const char *msg)
   }
 
 
-int osword_common(M6502 *mpu, word address, byte data)
+int oswordCommon(M6502 *mpu, word address, byte data)
 {
   byte *params= mpu->memory + mpu->registers->x + (mpu->registers->y << 8);
 
@@ -125,7 +130,7 @@ int osword_common(M6502 *mpu, word address, byte data)
   
 int osword(M6502 *mpu, word address, byte data)
 {
-  osword_common(mpu, address, data);
+  oswordCommon(mpu, address, data);
   rts;
 }
 
@@ -334,8 +339,8 @@ static int tubeOsword(M6502 *mpu, word address, byte value)
   switch (mpu->registers->a)
     {
       case 0:
-        /* TODO: Use -B's version for now. Ideally I would find some way to use readline. */
-        osword_common(mpu, address, value);
+        /* TODO: Use -B's version for now. Ideally I would find some way to use readline/editline. */
+        oswordCommon(mpu, address, value);
         return 0;
     }
 
@@ -407,7 +412,8 @@ static int doTtraps(int argc, char **argv, M6502 *mpu)
   if (!found)
     fail("-T requires Tube emulation ROM to be loaded");
 
-  /* on real hardware the ROM is copied into RAM on startup; all 64K is writeable */
+  /* On real hardware the ROM is copied into RAM on startup; all 64K is writeable. So
+   * we don't need to write-protect anything. */
 
   M6502_setCallback(mpu, illegal_instruction, 0x03, tubeOscli);
   M6502_setCallback(mpu, illegal_instruction, 0x13, tubeOsbyte);
@@ -443,6 +449,7 @@ static void usage(int status)
   fprintf(stream, "  -s addr last file -- save memory from addr to last in file\n");
   fprintf(stream, "  -T                -- Acorn 6502 Tube emulation\n");
   fprintf(stream, "  -v                -- print version number then exit\n");
+  fprintf(stream, "  -w                -- write memory to file run6502.out on exit\n");
   fprintf(stream, "  -X addr           -- terminate emulation if PC reaches addr\n");
   fprintf(stream, "  -x                -- exit without further ado\n");
   fprintf(stream, "  image             -- '-l 8000 image' in available ROM slot\n");
@@ -464,37 +471,6 @@ static int doVersion(int argc, char **argv, M6502 *mpu)
   puts(VERSION);
   exit(0);
   return 0;
-}
-
-
-static unsigned long htol(char *hex)
-{
-  char *end;
-  unsigned long l= strtol(hex, &end, 16);
-  if (*end) fail("bad hex number: %s", hex);
-  return l;
-}
-
-
-static int loadInterpreter(M6502 *mpu, word start, const char *path)
-{
-  FILE   *file= 0;
-  int     count= 0;
-  byte   *memory= mpu->memory + start;
-  size_t  max= 0x10000 - start;
-  int     c= 0;
-
-  if ((!(file= fopen(path, "r"))) || ('#' != fgetc(file)) || ('!' != fgetc(file)))
-    return 0;
-  while ((c= fgetc(file)) >= ' ')
-    ;
-  while ((count= fread(memory, 1, max, file)) > 0)
-    {
-      memory += count;
-      max -= count;
-    }
-  fclose(file);
-  return 1;
 }
 
 
@@ -524,6 +500,59 @@ static int load(M6502 *mpu, word address, const char *path)
   while ((count= fread(mpu->memory + address, 1, max, file)) > 0)
     {
       address += count;
+      max -= count;
+    }
+  fclose(file);
+  return 1;
+}
+
+
+static void writeMemory(void)
+{
+  if (!exit_write_mpu)
+    return;
+  if (!save(exit_write_mpu, 0, 0x10000, "run6502.out")) 
+    pfail("run6502.out");
+}
+
+
+/* TODO: Although -s is a startup option, we could make -w defer the action of -s,
+ * respecting its parameters when the time comes to save, instead of using a
+ * hard-coded address range and filename.
+ */
+static int doExitWrite(int argc, char **argv, M6502 *mpu)
+{
+  exit_write= 1;
+  exit_write_mpu= mpu;
+  atexit(writeMemory);
+  return 1;
+}
+
+
+static unsigned long htol(char *hex)
+{
+  char *end;
+  unsigned long l= strtol(hex, &end, 16);
+  if (*end) fail("bad hex number: %s", hex);
+  return l;
+}
+
+
+static int loadInterpreter(M6502 *mpu, word start, const char *path)
+{
+  FILE   *file= 0;
+  int     count= 0;
+  byte   *memory= mpu->memory + start;
+  size_t  max= 0x10000 - start;
+  int     c= 0;
+
+  if ((!(file= fopen(path, "r"))) || ('#' != fgetc(file)) || ('!' != fgetc(file)))
+    return 0;
+  while ((c= fgetc(file)) >= ' ')
+    ;
+  while ((count= fread(memory, 1, max, file)) > 0)
+    {
+      memory += count;
       max -= count;
     }
   fclose(file);
@@ -685,6 +714,7 @@ int main(int argc, char **argv)
 	else if (!strcmp(*argv, "-s"))	n= doSave(argc, argv, mpu);
 	else if (!strcmp(*argv, "-T"))  tTraps= 1;
 	else if (!strcmp(*argv, "-v"))	n= doVersion(argc, argv, mpu);
+	else if (!strcmp(*argv, "-w"))  n= doExitWrite(argc, argv, mpu);
 	else if (!strcmp(*argv, "-X"))	n= doXtrap(argc, argv, mpu);
 	else if (!strcmp(*argv, "-x"))	exit(0);
 	else if ('-' == **argv)		usage(1);
@@ -718,7 +748,10 @@ int main(int argc, char **argv)
 
   M6502_reset(mpu);
   M6502_run(mpu);
-  M6502_delete(mpu);
+
+  if (exit_write)
+    writeMemory();
+  exit_write_mpu= 0; M6502_delete(mpu);
 
   return 0;
 }

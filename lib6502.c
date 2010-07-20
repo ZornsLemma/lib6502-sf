@@ -215,7 +215,7 @@ enum {
 	int v= (int8_t)A - (int8_t) B - b;						\
 	fetch();									\
 	A= c;										\
-	setNVZC(A & 0x100, ((A & 0x100) > 0) ^ ((v & 0x100) != 0), A == 0, c >= 0);	\
+	setNVZC(A & 0x80, ((A & 0x80) > 0) ^ ((v & 0x100) != 0), A == 0, c >= 0);	\
 	next();										\
       }											\
     else										\
