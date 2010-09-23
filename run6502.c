@@ -184,8 +184,19 @@ int osbyte(M6502 *mpu, word address, byte data)
 }
 
 
-/* TODO: This is misnamed as it does OSCLI-style parsing */
 static char *getYXString(M6502 *mpu)
+{
+  byte *params= mpu->memory + mpu->registers->x + (mpu->registers->y << 8);
+  static char string[1024];
+  char *ptr= string;
+  while (13 != *params)
+    *ptr++= *params++;
+  *ptr= '\0';
+  return string;
+}
+
+
+static char *getYXStringOscli(M6502 *mpu)
 {
   byte *params= mpu->memory + mpu->registers->x + (mpu->registers->y << 8);
   static char command[1024];
@@ -200,7 +211,7 @@ static char *getYXString(M6502 *mpu)
 
 int oscli(M6502 *mpu, word address, byte data)
 {
-  char *command= getYXString(mpu);
+  char *command= getYXStringOscli(mpu);
   system(command);
   rts;
 }
@@ -273,6 +284,43 @@ static int doBtraps(int argc, char **argv, M6502 *mpu)
 }
 
 
+/* This array is automatically initialised to 0 as it's static. Element 0 is
+ * never used (0 is not a valid BBC file handle) but it's easier not to have to
+ * subtract one all the time. */
+/* TODO: All the F*D* references in the code should really be F*H* I suppose.
+ * (File handle not descriptor) */
+/* TODO: Should this be at the top of the code with other global data? */
+static FILE *fd_array[256]; /* initialised to 0 as it's static */
+
+
+static int getFreeBbcFd()
+{
+  int bbc_fd;
+  for (bbc_fd= 1;  bbc_fd <= 255;  ++bbc_fd)
+    if (fd_array[bbc_fd] == 0)
+      return bbc_fd;
+  return 0;
+}
+
+
+static void associateBbcFdAndHostFile(int bbc_fd, FILE *host_file)
+{
+  fd_array[bbc_fd]= host_file;
+}
+
+
+static FILE *getHostFileForBbcFd(int bbc_fd)
+{
+  return fd_array[bbc_fd];
+}
+
+
+static void freeBbcFd(int bbc_fd)
+{
+  fd_array[bbc_fd]= 0;
+}
+
+
 static int tubeOscli(M6502 *mpu, word address, byte value)
 {
   const char *error= "Bad command";
@@ -340,6 +388,11 @@ static int tubeOsword(M6502 *mpu, word address, byte value)
     {
       case 0:
         /* TODO: Use -B's version for now. Ideally I would find some way to use readline/editline. */
+	/* TODO: -B's version is pretty naff. It can't return full-length due to use of
+	 * the buffer in-place, any characters you enter past the limit remain in the
+	 * input stream and get taken next time input is required. I am not going to try
+	 * and fix it as I hope to use readline/editline and sidestep it, but this note is
+	 * just to keep track of its problems in the meantime. */
         oswordCommon(mpu, address, value);
         return 0;
     }
@@ -366,6 +419,129 @@ static int tubeOsrdch(M6502 *mpu, word address, byte value)
     exit(0);
   mpu->registers->a= c;
   return 0;
+}
+
+
+static int tubeOsbget(M6502 *mpu, word address, byte value)
+{
+  FILE *host_file= getHostFileForBbcFd(mpu->registers->y);
+  if (host_file == 0)
+  {
+    /* TODO: I suspect we should raise an OS error ("Channel"). For now we just
+     * return with C set to indicate an error. */
+    mpu->registers->p |= 1;
+    return 0;
+  }
+
+  int c= getc(host_file);
+  if (c == EOF)
+  {
+    /* TODO: We should probably raise an OS error if this is an error not just
+     * EOF. For now we treat both the same. */
+    mpu->registers->p |= 1; /* TODO: Not just here, we need a macro or helper
+			       fn for this */
+    return 0;
+  }
+  
+  mpu->registers->a= c;
+  mpu->registers->p &= 0xFE;
+  return 0;
+}
+
+
+static int tubeOsfindClose(int bbc_fd)
+{
+  FILE *host_file= getHostFileForBbcFd(bbc_fd);
+  if (host_file == 0)
+  {
+    /* TODO: I suspect we should raise an OS error ("Channel"). For now we just
+     * return silently. */
+    return 0;
+  }
+
+  if (fclose(host_file) == EOF)
+  {
+    /* TODO: I suspect we should raise an OS error. For now we just return
+     * silently. */
+    /* TODO: Also, should we leave the FD allocated on the BBC side? I suspect
+     * that's best, as it's vaguely conceivable it can/will then be re-closed
+     * successfully later. */
+    return 0;
+  }
+
+  freeBbcFd(bbc_fd);
+  return 0;
+}
+
+
+static int tubeOsfindOpen(M6502 *mpu, const char *mode)
+{
+  int bbc_fd= getFreeBbcFd();
+  FILE *host_file= 0;
+
+  if (bbc_fd == 0)
+    {
+      /* TODO: I suspect we should raise an OS error. For now we just return with A=0. */
+      mpu->registers->a= 0;
+      return 0;
+    }
+  
+  host_file= fopen(getYXString(mpu), mode);
+  if (host_file == 0)
+  {
+    /* TODO: I suspect (though it's far from clear) we should raise an OS
+     * error. For now just return with A=0. */
+    mpu->registers->a= 0;
+    return 0;
+  }
+
+  associateBbcFdAndHostFile(bbc_fd, host_file);
+  mpu->registers->a= bbc_fd;
+  return 0;
+}
+
+
+static int tubeOsfind(M6502 *mpu, word address, byte value)
+{
+  int bbc_fd;
+
+  switch (mpu->registers->a)
+    {
+    case 0x00:	/* close file */
+      bbc_fd= mpu->registers->y;
+      if (bbc_fd != 0)
+	return tubeOsfindClose(bbc_fd);
+      else
+      {
+	/* TODO: CLOSE ALL OPEN FILES - NOT SURE WHAT HAPPENS IF ONE OF THEM FAILS */
+	fprintf(stderr, "\nTODO: Close all files support\n");
+      }
+      break;
+
+    case 0x40:  /* open file for input */
+      return tubeOsfindOpen(mpu, "rb");
+      break;
+
+    case 0x80:  /* open file for output */
+      return tubeOsfindOpen(mpu, "wb");
+
+    case 0xc0:	/* open file for update */
+      return tubeOsfindOpen(mpu, "r+b");
+
+    default:
+      {
+	/* TODO: Code like this occurs a lot, factor it out */
+	char state[64];
+	M6502_dump(mpu, state);
+	fflush(stdout);
+	fprintf(stderr, "\nUnsupported OSFIND %02X: %s\n", mpu->registers->a, state);
+
+	/* TODO: Not necessarily best option (what would a real machine do? is it
+	 * well-defined?) but returning with A=0 is a reasonably safe response. */
+	mpu->registers->a= 0;
+	return 0;
+      }
+   }
 }
 
 
@@ -420,6 +596,8 @@ static int doTtraps(int argc, char **argv, M6502 *mpu)
   M6502_setCallback(mpu, illegal_instruction, 0x23, tubeOsword);
   M6502_setCallback(mpu, illegal_instruction, 0x33, oswrchCommon);
   M6502_setCallback(mpu, illegal_instruction, 0x43, tubeOsrdch);
+  M6502_setCallback(mpu, illegal_instruction, 0x73, tubeOsbget);
+  M6502_setCallback(mpu, illegal_instruction, 0xA3, tubeOsfind);
   M6502_setCallback(mpu, illegal_instruction, 0xB3, tubeQuit);
   M6502_setCallback(mpu, illegal_instruction, 0xC3, tubeEnterLanguage);
 
