@@ -188,17 +188,19 @@ enum {
       }											\
     else										\
       {											\
-	int l, h, s;									\
+	/* Algorithm taken from http://www.6502.org/tutorials/decimal_mode.html */      \
 	/* inelegant & slow, but consistent with the hw for illegal digits */		\
+	int l, s, t, v;									\
 	l= (A & 0x0F) + (B & 0x0F) + getC();						\
-	h= (A & 0xF0) + (B & 0xF0);							\
-	if (l >= 0x0A) { l -= 0x0A;  h += 0x10; }					\
-	if (h >= 0xA0) { h -= 0xA0; }							\
-	fetch();									\
-	s= h | (l & 0x0F);								\
-	/* only C is valid on NMOS 6502 */						\
-	setNVZC(s & 0x80, !(((A ^ B) & 0x80) && ((A ^ s) & 0x80)), !s, !!(h & 0x80));	\
+	if (l >= 0x0A) { l = ((l + 0x06) & 0x0F) + 0x10; }				\
+	s= (A & 0xF0) + (B & 0xF0) + l;							\
+	t= (int8_t)(A & 0xF0) + (int8_t)(B & 0xF0) + (int8_t)l;				\
+	v= (t < -128) || (t > 127);							\
+	if (s >= 0xA0) { s += 0x60; }							\
+        fetch();									\
 	A= s;										\
+	/* only C is valid on NMOS 6502 */						\
+	setNVZC(s & 0x80, v, !A, (s >= 0x100));						\
 	tick(1);									\
 	next();										\
       }											\
@@ -220,18 +222,18 @@ enum {
       }											\
     else										\
       {											\
-	/* this is verbatim ADC, with a 10's complemented operand */			\
-	int l, h, s;									\
-	B= 0x99 - B;									\
-	l= (A & 0x0F) + (B & 0x0F) + getC();						\
-	h= (A & 0xF0) + (B & 0xF0);							\
-	if (l >= 0x0A) { l -= 0x0A;  h += 0x10; }					\
-	if (h >= 0xA0) { h -= 0xA0; }							\
+	/* Algorithm taken from http://www.6502.org/tutorials/decimal_mode.html */      \
+	int b= 1 - (P &0x01);								\
+	int l= (A & 0x0F) - (B & 0x0F) - b;	 					\
+	int s= A - B + getC() - 1;							\
+	int c= !(s & 0x100);								\
+	int v= (int8_t)A - (int8_t) B - b;						\
+      	if (s < 0) { s -= 0x60; } 							\
+	if (l < 0) { s -= 0x06; }							\
 	fetch();									\
-	s= h | (l & 0x0F);								\
+	A = s;										\
 	/* only C is valid on NMOS 6502 */						\
-	setNVZC(s & 0x80, !(((A ^ B) & 0x80) && ((A ^ s) & 0x80)), !s, !!(h & 0x80));	\
-	A= s;										\
+	setNVZC(s & 0x80, ((v & 0x80) > 0) ^ ((v & 0x100) != 0), !A, c);		\
 	tick(1);									\
 	next();										\
       }											\
@@ -305,14 +307,27 @@ enum {
   }						\
   next();
 
+/* BIT is unique in varying its behaviour based on addressing mode;
+ * BIT immediate only modifies the Z flag.
+ * http://6502.org/tutorials/65c02opcodes.html
+ */
+#define bim(ticks, adrmode)			\
+  adrmode(ticks);				\
+  fetch();					\
+  {						\
+    byte B= getMemory(ea);			\
+    setZ((A & B) == 0);                  	\
+  }						\
+  next();
+
 #define tsb(ticks, adrmode)			\
   adrmode(ticks);				\
   fetch();					\
   {						\
     byte b= getMemory(ea);			\
+    setZ(!(b & A));				\
     b |= A;					\
     putMemory(ea, b);				\
-    setZ(!b);					\
   }						\
   next();
 
@@ -321,9 +336,9 @@ enum {
   fetch();					\
   {						\
     byte b= getMemory(ea);			\
-    b |= (A ^ 0xFF);				\
+    setZ(!(b & A));				\
+    b &= (A ^ 0xFF);				\
     putMemory(ea, b);				\
-    setZ(!b);					\
   }						\
   next();
 
@@ -495,21 +510,24 @@ enum {
   tick(1);					\
   next();
 
-#define jmp(ticks, adrmode)				\
-  adrmode(ticks);					\
-  PC= ea;						\
-  if (mpu->callbacks->call[ea])				\
-    {							\
-      word addr;					\
-      externalise();					\
-      if ((addr= mpu->callbacks->call[ea](mpu, ea, 0)))	\
-	{						\
-	  internalise();				\
-	  PC= addr;					\
-	}						\
-    }							\
-  fetch();						\
-  next();
+#define jmp(ticks, adrmode)					\
+  {								\
+      adrmode(ticks);						\
+      byte opcode= mpu->memory[PC-3];                          	\
+      PC= ea;							\
+      if (mpu->callbacks->call[ea])				\
+	{							\
+	  word addr;						\
+	  externalise();					\
+	  if ((addr= mpu->callbacks->call[ea](mpu, ea, opcode)))\
+	    {							\
+	      internalise();					\
+	      PC= addr;						\
+	    }							\
+	}							\
+      fetch();							\
+      next();							\
+  }
 
 #define jsr(ticks, adrmode)				\
   PC++;							\
@@ -521,7 +539,7 @@ enum {
     {							\
       word addr;					\
       externalise();					\
-      if ((addr= mpu->callbacks->call[ea](mpu, ea, 0)))	\
+      if ((addr= mpu->callbacks->call[ea](mpu, ea, 0x20))) \
 	{						\
 	  internalise();				\
 	  PC= addr;					\
@@ -547,7 +565,11 @@ enum {
   push(PC >> 8);						\
   push(PC & 0xff);						\
   P |= flagB;							\
-  push(P);							\
+  /* http://www.6502.org/tutorials/65c02opcodes.html - unlike
+   * the 6502, the 65C02 clears D on BRK.
+   */								\
+  P &= ~flagD;                                                  \
+  push(P | flagX);						\
   P |= flagI;							\
   {								\
     word hdlr= getMemory(0xfffe) + (getMemory(0xffff) << 8);	\
@@ -587,8 +609,10 @@ enum {
     tick(ticks);									\
     if (mpu->callbacks->illegal_instruction[instruction])				\
       {											\
+	adrmode(ticks);									\
 	externalise();									\
-        if (addr= (mpu->callbacks->illegal_instruction[instruction](mpu, addr, 0)))     \
+        if (addr= (mpu->callbacks->illegal_instruction[instruction](mpu, addr,          \
+								    instruction)))      \
           {										\
 	    mpu->registers->pc= addr;							\
           }										\
@@ -598,9 +622,9 @@ enum {
       }											\
     else										\
       {											\
-	fflush(stdout);									\
-	fprintf(stderr, "\nundefined instruction %02X at %04X\n", instruction, addr);	\
-	return;										\
+        adrmode(ticks);                                                                 \
+        fetch();                                                                        \
+        next();                                                                         \
       }											\
   };
 
@@ -613,7 +637,7 @@ enum {
 #define pha(ticks, adrmode)	phR(ticks, adrmode, A)
 #define phx(ticks, adrmode)	phR(ticks, adrmode, X)
 #define phy(ticks, adrmode)	phR(ticks, adrmode, Y)
-#define php(ticks, adrmode)	phR(ticks, adrmode, P)
+#define php(ticks, adrmode)	phR(ticks, adrmode, P | flagX | flagB)
 
 #define plR(ticks, adrmode, R)			\
   fetch();					\
@@ -671,13 +695,13 @@ enum {
   _(38, sec, implied,   2);  _(39, and, absy,      4);  _(3a, dea, implied,   2);  _(3b, ill, implied, 2);      \
   _(3c, bit, absx,      4);  _(3d, and, absx,      4);  _(3e, rol, absx,      7);  _(3f, ill, implied, 2);      \
   _(40, rti, implied,   6);  _(41, eor, indx,      6);  _(42, ill, implied,   2);  _(43, ill, implied, 2);      \
-  _(44, ill, implied,   2);  _(45, eor, zp,        3);  _(46, lsr, zp,        5);  _(47, ill, implied, 2);      \
+  _(44, ill, zp,        3);  _(45, eor, zp,        3);  _(46, lsr, zp,        5);  _(47, ill, implied, 2);      \
   _(48, pha, implied,   3);  _(49, eor, immediate, 3);  _(4a, lsra,implied,   2);  _(4b, ill, implied, 2);      \
   _(4c, jmp, abs,       3);  _(4d, eor, abs,       4);  _(4e, lsr, abs,       6);  _(4f, ill, implied, 2);      \
   _(50, bvc, relative,  2);  _(51, eor, indy,      5);  _(52, eor, indzp,     3);  _(53, ill, implied, 2);      \
-  _(54, ill, implied,   2);  _(55, eor, zpx,       4);  _(56, lsr, zpx,       6);  _(57, ill, implied, 2);      \
+  _(54, ill, zp,        4);  _(55, eor, zpx,       4);  _(56, lsr, zpx,       6);  _(57, ill, implied, 2);      \
   _(58, cli, implied,   2);  _(59, eor, absy,      4);  _(5a, phy, implied,   3);  _(5b, ill, implied, 2);      \
-  _(5c, ill, implied,   2);  _(5d, eor, absx,      4);  _(5e, lsr, absx,      7);  _(5f, ill, implied, 2);      \
+  _(5c, ill, abs,       8);  _(5d, eor, absx,      4);  _(5e, lsr, absx,      7);  _(5f, ill, implied, 2);      \
   _(60, rts, implied,   6);  _(61, adc, indx,      6);  _(62, ill, implied,   2);  _(63, ill, implied, 2);      \
   _(64, stz, zp,        3);  _(65, adc, zp,        3);  _(66, ror, zp,        5);  _(67, ill, implied, 2);      \
   _(68, pla, implied,   4);  _(69, adc, immediate, 3);  _(6a, rora,implied,   2);  _(6b, ill, implied, 2);      \
@@ -707,17 +731,17 @@ enum {
   _(c8, iny, implied,   2);  _(c9, cmp, immediate, 3);  _(ca, dex, implied,   2);  _(cb, ill, implied, 2);      \
   _(cc, cpy, abs,       4);  _(cd, cmp, abs,       4);  _(ce, dec, abs,       6);  _(cf, ill, implied, 2);      \
   _(d0, bne, relative,  2);  _(d1, cmp, indy,      5);  _(d2, cmp, indzp,     3);  _(d3, ill, implied, 2);      \
-  _(d4, ill, implied,   2);  _(d5, cmp, zpx,       4);  _(d6, dec, zpx,       6);  _(d7, ill, implied, 2);      \
+  _(d4, ill, zp,        4);  _(d5, cmp, zpx,       4);  _(d6, dec, zpx,       6);  _(d7, ill, implied, 2);      \
   _(d8, cld, implied,   2);  _(d9, cmp, absy,      4);  _(da, phx, implied,   3);  _(db, ill, implied, 2);      \
-  _(dc, ill, implied,   2);  _(dd, cmp, absx,      4);  _(de, dec, absx,      7);  _(df, ill, implied, 2);      \
+  _(dc, ill, abs,       4);  _(dd, cmp, absx,      4);  _(de, dec, absx,      7);  _(df, ill, implied, 2);      \
   _(e0, cpx, immediate, 3);  _(e1, sbc, indx,      6);  _(e2, ill, implied,   2);  _(e3, ill, implied, 2);      \
   _(e4, cpx, zp,        3);  _(e5, sbc, zp,        3);  _(e6, inc, zp,        5);  _(e7, ill, implied, 2);      \
   _(e8, inx, implied,   2);  _(e9, sbc, immediate, 3);  _(ea, nop, implied,   2);  _(eb, ill, implied, 2);      \
   _(ec, cpx, abs,       4);  _(ed, sbc, abs,       4);  _(ee, inc, abs,       6);  _(ef, ill, implied, 2);      \
   _(f0, beq, relative,  2);  _(f1, sbc, indy,      5);  _(f2, sbc, indzp,     3);  _(f3, ill, implied, 2);      \
-  _(f4, ill, implied,   2);  _(f5, sbc, zpx,       4);  _(f6, inc, zpx,       6);  _(f7, ill, implied, 2);      \
+  _(f4, ill, zp,        4);  _(f5, sbc, zpx,       4);  _(f6, inc, zpx,       6);  _(f7, ill, implied, 2);      \
   _(f8, sed, implied,   2);  _(f9, sbc, absy,      4);  _(fa, plx, implied,   4);  _(fb, ill, implied, 2);      \
-  _(fc, ill, implied,   2);  _(fd, sbc, absx,      4);  _(fe, inc, absx,      7);  _(ff, ill, implied, 2);
+  _(fc, ill, abs,       4);  _(fd, sbc, absx,      4);  _(fe, inc, absx,      7);  _(ff, ill, implied, 2);
 
 
 
@@ -819,6 +843,7 @@ void M6502_run(M6502 *mpu)
   do_insns(dispatch);
   end();
 
+  externalise();
 # undef begin
 # undef internalise
 # undef externalise
@@ -827,7 +852,6 @@ void M6502_run(M6502 *mpu)
 # undef dispatch
 # undef end
 
-  (void)oops;
 }
 
 
